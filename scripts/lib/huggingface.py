@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from . import http
 
@@ -31,14 +32,14 @@ def _log(msg: str):
 def fetch_huggingface_models(
     topic: Optional[str] = None,
     depth: str = "default",
-    days: int = 30,
+    days: int = 0,  # Changed default to 0 (no date filter) - popular models are often older
 ) -> List[Dict[str, Any]]:
     """Fetch popular models from HuggingFace.
 
     Args:
         topic: Optional topic filter (case-insensitive substring match on model ID)
         depth: 'quick', 'default', or 'deep'
-        days: Only include models from last N days (0 = no filter)
+        days: Only include models from last N days (0 = no filter, default)
 
     Returns:
         List of model dicts with modelId, downloads, likes, tags.
@@ -51,33 +52,24 @@ def fetch_huggingface_models(
         "direction": -1,
         "limit": count * 2,  # Fetch more to filter later
     }
+    
+    url = f"{HF_MODELS_URL}?{urlencode(params)}"
 
     try:
-        response = http.request("GET", HF_MODELS_URL, params=params, timeout=30)
+        response = http.request("GET", url, timeout=30)
     except Exception as e:
         _log(f"Fetch failed: {e}")
         return []
 
     models = response if isinstance(response, list) else []
     
-    # Calculate date threshold
-    date_threshold = None
-    if days > 0:
-        date_threshold = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-
     items = []
     for m in models:
         model_id = m.get("modelId", "")
-        created_at = m.get("createdAt", "")
         
         # Topic filter (case-insensitive)
         if topic and topic.lower() not in model_id.lower():
             continue
-        
-        # Date filter
-        if date_threshold and created_at:
-            if created_at < date_threshold:
-                continue
 
         items.append({
             "model_id": model_id,
@@ -85,7 +77,7 @@ def fetch_huggingface_models(
             "downloads": m.get("downloads", 0),
             "likes": m.get("likes", 0),
             "tags": m.get("tags", []),
-            "created_at": created_at,
+            "created_at": m.get("createdAt", ""),
             "source": "huggingface",
         })
         
