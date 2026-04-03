@@ -46,7 +46,7 @@ TIMEOUT_PROFILES = {
 # Valid source names for the --search flag
 VALID_SEARCH_SOURCES = {
     "reddit", "x", "hn", "bluesky", "bsky", "truthsocial", "truth", "youtube", "tiktok", "instagram",
-    "polymarket", "web", "xiaohongshu", "xhs",
+    "polymarket", "web", "xiaohongshu", "xhs", "v2ex", "huggingface", "hf",
 }
 
 
@@ -142,6 +142,8 @@ from lib import (
     hackernews,
     xiaohongshu_api,
     polymarket,
+    v2ex,
+    huggingface,
     entity_extract,
     env,
     http,
@@ -602,6 +604,49 @@ def _search_polymarket(
     return pm_items, pm_error
 
 
+
+
+def _search_v2ex(
+    topic: str,
+    depth: str,
+) -> tuple:
+    """Search V2EX hot topics (runs in thread).
+
+    Returns:
+        Tuple of (v2ex_items, v2ex_error)
+    """
+    v2ex_error = None
+
+    try:
+        items = v2ex.fetch_v2ex_hot(topic=topic, depth=depth)
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+    v2ex_items = v2ex.parse_v2ex_response(items, query=topic)
+
+    return v2ex_items, v2ex_error
+
+
+def _search_huggingface(
+    topic: str,
+    depth: str,
+) -> tuple:
+    """Search HuggingFace models (runs in thread).
+
+    Returns:
+        Tuple of (hf_items, hf_error)
+    """
+    hf_error = None
+
+    try:
+        items = huggingface.fetch_huggingface_models(topic=topic, depth=depth)
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+    hf_items = huggingface.parse_huggingface_response(items, query=topic)
+
+    return hf_items, hf_error
+
 def _search_web(
     topic: str,
     config: dict,
@@ -893,16 +938,18 @@ def run_research(
     do_bluesky: bool = True,
     do_truthsocial: bool = True,
     do_polymarket: bool = True,
+    do_v2ex: bool = True,
+    do_huggingface: bool = True,
     no_native_web: bool = False,
 ) -> tuple:
     """Run the research pipeline.
 
     Returns:
         Tuple of (reddit_items, x_items, youtube_items, tiktok_items, instagram_items,
-                  hackernews_items, bluesky_items, truthsocial_items, polymarket_items, web_items, web_needed,
+                  hackernews_items, bluesky_items, truthsocial_items, polymarket_items, v2ex_items, huggingface_items, web_items, web_needed,
                   raw_openai, raw_xai, raw_reddit_enriched,
                   reddit_error, x_error, youtube_error, tiktok_error, instagram_error,
-                  hackernews_error, bluesky_error, truthsocial_error, polymarket_error, web_error)
+                  hackernews_error, bluesky_error, truthsocial_error, polymarket_error, v2ex_error, huggingface_error, web_error)
 
     Note: web_needed is True when web search should be performed by the assistant
     (i.e., no native web search API keys are configured). When native web search
@@ -921,6 +968,8 @@ def run_research(
     bluesky_items = []
     truthsocial_items = []
     polymarket_items = []
+    v2ex_items = []
+    huggingface_items = []
     web_items = []
     raw_openai = None
     raw_xai = None
@@ -934,6 +983,8 @@ def run_research(
     bluesky_error = None
     truthsocial_error = None
     polymarket_error = None
+    v2ex_error = None
+    huggingface_error = None
     web_error = None
     xiaohongshu_error = None
 
@@ -1017,7 +1068,7 @@ def run_research(
                     progress.show_error(f"Instagram error: {e}")
             if progress:
                 progress.end_instagram(len(instagram_items))
-        return reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, web_error
+        return reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, v2ex_items, huggingface_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, v2ex_error, huggingface_error, web_error
 
     # Determine which searches to run
     do_reddit = sources in ("both", "reddit", "all", "reddit-web")
@@ -1036,6 +1087,8 @@ def run_research(
     bluesky_future = None
     truthsocial_future = None
     polymarket_future = None
+    v2ex_future = None
+    huggingface_future = None
     web_future = None
     max_workers = (
         2
@@ -1047,6 +1100,8 @@ def run_research(
         + (1 if do_bluesky else 0)
         + (1 if do_truthsocial else 0)
         + (1 if do_polymarket else 0)
+        + (1 if do_v2ex else 0)
+        + (1 if do_huggingface else 0)
         + (1 if web_backend else 0)
     )
 
@@ -1118,6 +1173,16 @@ def run_research(
                 progress.start_polymarket()
             polymarket_future = executor.submit(
                 _search_polymarket, topic, from_date, to_date, depth
+            )
+
+        if do_v2ex:
+            v2ex_future = executor.submit(
+                _search_v2ex, topic, depth
+            )
+
+        if do_huggingface:
+            huggingface_future = executor.submit(
+                _search_huggingface, topic, depth
             )
 
         if web_backend:
@@ -1292,6 +1357,26 @@ def run_research(
             if progress:
                 progress.end_polymarket(len(polymarket_items))
 
+        if v2ex_future:
+            try:
+                v2ex_items, v2ex_error = v2ex_future.result(timeout=future_timeout)
+                if v2ex_error and progress:
+                    progress.show_error(f"V2EX error: {v2ex_error}")
+            except TimeoutError:
+                v2ex_error = f"V2EX search timed out"
+            except Exception as e:
+                v2ex_error = f"{type(e).__name__}: {e}"
+
+        if huggingface_future:
+            try:
+                huggingface_items, huggingface_error = huggingface_future.result(timeout=future_timeout)
+                if huggingface_error and progress:
+                    progress.show_error(f"HuggingFace error: {huggingface_error}")
+            except TimeoutError:
+                huggingface_error = f"HuggingFace search timed out"
+            except Exception as e:
+                huggingface_error = f"{type(e).__name__}: {e}"
+
         if web_future:
             try:
                 web_items, web_error = web_future.result(timeout=future_timeout)
@@ -1409,7 +1494,7 @@ def run_research(
         if sup_x:
             x_items.extend(sup_x)
 
-    return reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, web_error
+    return reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, v2ex_items, huggingface_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, v2ex_error, huggingface_error, web_error
 
 
 def main():
@@ -1731,6 +1816,8 @@ def main():
     search_do_bluesky = has_bluesky and qt.is_source_enabled("bluesky", query_type)
     search_do_truthsocial = False  # Always opt-in (requires --search truthsocial)
     search_do_polymarket = qt.is_source_enabled("polymarket", query_type)
+    search_do_v2ex = True  # V2EX is free, no API key needed
+    search_do_huggingface = True  # HuggingFace is free, no API key needed
     search_run_youtube = has_ytdlp and qt.is_source_enabled("youtube", query_type)
     search_run_tiktok = has_tiktok and qt.is_source_enabled("tiktok", query_type)
     search_run_instagram = has_instagram and qt.is_source_enabled("instagram", query_type)
@@ -1755,6 +1842,8 @@ def main():
         search_do_bluesky = ("bluesky" in search_sources or "bsky" in search_sources) and has_bluesky
         search_do_truthsocial = ("truthsocial" in search_sources or "truth" in search_sources) and has_truthsocial
         search_do_polymarket = "polymarket" in search_sources
+        search_do_v2ex = "v2ex" in search_sources
+        search_do_huggingface = ("huggingface" in search_sources or "hf" in search_sources)
         search_run_youtube = "youtube" in search_sources and has_ytdlp
         search_run_tiktok = "tiktok" in search_sources and has_tiktok
         search_run_instagram = "instagram" in search_sources and has_instagram
@@ -1773,7 +1862,7 @@ def main():
             sources = "web"  # hn/polymarket only; no Reddit/X
 
     # Run research
-    reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, web_error = run_research(
+    reddit_items, x_items, youtube_items, tiktok_items, instagram_items, hackernews_items, bluesky_items, truthsocial_items, polymarket_items, v2ex_items, huggingface_items, web_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error, youtube_error, tiktok_error, instagram_error, hackernews_error, bluesky_error, truthsocial_error, polymarket_error, v2ex_error, huggingface_error, web_error = run_research(
         args.topic,
         sources,
         config,
@@ -1794,6 +1883,8 @@ def main():
         do_bluesky=search_do_bluesky,
         do_truthsocial=search_do_truthsocial,
         do_polymarket=search_do_polymarket,
+        do_v2ex=search_do_v2ex,
+        do_huggingface=search_do_huggingface,
         no_native_web=args.no_native_web,
     )
 
@@ -1810,6 +1901,8 @@ def main():
     normalized_bsky = normalize.normalize_bluesky_items(bluesky_items, from_date, to_date) if bluesky_items else []
     normalized_ts = normalize.normalize_truthsocial_items(truthsocial_items, from_date, to_date) if truthsocial_items else []
     normalized_pm = normalize.normalize_polymarket_items(polymarket_items, from_date, to_date) if polymarket_items else []
+    normalized_v2ex = v2ex.parse_v2ex_response(v2ex_items, query=args.topic) if v2ex_items else []
+    normalized_hf = huggingface.parse_huggingface_response(huggingface_items, query=args.topic) if huggingface_items else []
     normalized_web = websearch.normalize_websearch_items(web_items, from_date, to_date) if web_items else []
 
     # Hard date filter: exclude items with verified dates outside the range
@@ -1830,6 +1923,9 @@ def main():
     # Polymarket: skip hard date filter - markets are active/traded, updatedAt is fine
     filtered_pm = normalized_pm
     filtered_web = normalize.filter_by_date_range(normalized_web, from_date, to_date) if normalized_web else []
+    # V2EX and HuggingFace: use parsed items directly (already normalized with relevance)
+    filtered_v2ex = normalized_v2ex
+    filtered_hf = normalized_hf
 
     # Score items
     scored_reddit = score.score_reddit_items(filtered_reddit)
@@ -1842,6 +1938,9 @@ def main():
     scored_ts = score.score_truthsocial_items(filtered_ts) if filtered_ts else []
     scored_pm = score.score_polymarket_items(filtered_pm) if filtered_pm else []
     scored_web = score.score_websearch_items(filtered_web, query_type=query_type) if filtered_web else []
+    # V2EX and HuggingFace already have relevance scores from parse functions
+    scored_v2ex = filtered_v2ex
+    scored_hf = filtered_hf
 
     # Sort items (query-type-aware tiebreaker ordering)
     sorted_reddit = score.sort_items(scored_reddit, query_type=query_type)
@@ -1854,6 +1953,8 @@ def main():
     sorted_ts = score.sort_items(scored_ts, query_type=query_type) if scored_ts else []
     sorted_pm = score.sort_items(scored_pm, query_type=query_type) if scored_pm else []
     sorted_web = score.sort_items(scored_web, query_type=query_type) if scored_web else []
+    sorted_v2ex = score.sort_items(scored_v2ex, query_type=query_type) if scored_v2ex else []
+    sorted_hf = score.sort_items(scored_hf, query_type=query_type) if scored_hf else []
 
     # Dedupe items
     deduped_reddit = dedupe.dedupe_reddit(sorted_reddit)
@@ -1865,6 +1966,8 @@ def main():
     deduped_bsky = dedupe.dedupe_bluesky(sorted_bsky) if sorted_bsky else []
     deduped_ts = dedupe.dedupe_truthsocial(sorted_ts) if sorted_ts else []
     deduped_pm = dedupe.dedupe_polymarket(sorted_pm) if sorted_pm else []
+    deduped_v2ex = sorted_v2ex  # No dedupe needed for V2EX
+    deduped_hf = sorted_hf  # No dedupe needed for HuggingFace
     deduped_web = websearch.dedupe_websearch(sorted_web) if sorted_web else []
 
     # Post-retrieval relevance filter: drop low-relevance items per source
@@ -1880,7 +1983,7 @@ def main():
 
     # Cross-source linking: annotate items that discuss the same story
     dedupe.cross_source_link(
-        deduped_reddit, deduped_x, deduped_youtube, deduped_tiktok, deduped_ig, deduped_hn, deduped_bsky, deduped_ts, deduped_pm, deduped_web,
+        deduped_reddit, deduped_x, deduped_youtube, deduped_tiktok, deduped_ig, deduped_hn, deduped_bsky, deduped_ts, deduped_pm, deduped_v2ex, deduped_hf, deduped_web,
     )
 
     progress.end_processing()
@@ -1903,6 +2006,8 @@ def main():
     report.bluesky = deduped_bsky
     report.truthsocial = deduped_ts
     report.polymarket = deduped_pm
+    report.v2ex = deduped_v2ex
+    report.huggingface = deduped_hf
     report.web = deduped_web
     report.reddit_error = reddit_error
     report.x_error = x_error
@@ -1926,7 +2031,7 @@ def main():
     if sources == "web":
         progress.show_web_only_complete()
     else:
-        progress.show_complete(len(deduped_reddit), len(deduped_x), len(deduped_youtube), len(deduped_hn), len(deduped_pm), len(deduped_tiktok), len(deduped_ig))
+        progress.show_complete(len(deduped_reddit), len(deduped_x), len(deduped_youtube), len(deduped_hn), len(deduped_pm), len(deduped_tiktok), len(deduped_ig), len(deduped_v2ex), len(deduped_hf))
 
     # Build source info for status footer
     source_info = {}
